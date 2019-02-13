@@ -10,14 +10,15 @@ import (
 	"log"
 	"strings"
 
+	"github.com/saibing/bingo/langserver/internal/goast"
 	"golang.org/x/tools/go/ast/astutil"
 	"golang.org/x/tools/go/packages"
 )
 
 type CompletionItem struct {
-	Label, Detail string
-	Kind          CompletionItemKind
-	Score         float64
+	Label, Detail, Documentation string
+	Kind                         CompletionItemKind
+	Score                        float64
 }
 
 type CompletionItemKind int
@@ -108,7 +109,7 @@ func Completion(ctx context.Context, f File, pos token.Pos) (items []CompletionI
 			if typ != nil && matchingTypes(typ, obj.Type()) {
 				weight *= 10.0
 			}
-			item := formatCompletion(obj, pkgStringer, weight, func(v *types.Var) bool {
+			item := formatCompletion(obj, pkg, pkgStringer, weight, func(v *types.Var) bool {
 				return isParameter(sig, v)
 			})
 			items = append(items, item)
@@ -452,11 +453,56 @@ func complit(path []ast.Node, pos token.Pos, pkg *types.Package, info *types.Inf
 	return items, prefix, false
 }
 
+// joinCommentGroups joins the resultant non-empty comment text from two
+// CommentGroups with a newline.
+func joinCommentGroups(a, b *ast.CommentGroup) string {
+	aText := a.Text()
+	bText := b.Text()
+	if aText == "" {
+		return bText
+	} else if bText == "" {
+		return aText
+	} else {
+		return aText + "\n" + bText
+	}
+}
+
+func getDocumentation(pkg *packages.Package, obj types.Object) (string, error) {
+	pathNodes, _, _ := goast.GetObjectPathNode(pkg, obj)
+	if len(pathNodes) == 0 {
+		return "", nil
+	}
+
+	// Pull the comment out of the comment map for the file. Do
+	// not search too far away from the current path.
+	var comments string
+	for i := 0; i < 3 && i < len(pathNodes) && comments == ""; i++ {
+		switch v := pathNodes[i].(type) {
+		case *ast.Field:
+			// Concat associated documentation with any inline comments
+			comments = joinCommentGroups(v.Doc, v.Comment)
+		case *ast.ValueSpec:
+			comments = v.Doc.Text()
+		case *ast.TypeSpec:
+			comments = v.Doc.Text()
+		case *ast.GenDecl:
+			comments = v.Doc.Text()
+		case *ast.FuncDecl:
+			comments = v.Doc.Text()
+		}
+	}
+	return comments, nil
+}
+
 // formatCompletion creates a completion item for a given types.Object.
-func formatCompletion(obj types.Object, qualifier types.Qualifier, score float64, isParam func(*types.Var) bool) CompletionItem {
+func formatCompletion(obj types.Object, pkg *packages.Package, qualifier types.Qualifier, score float64, isParam func(*types.Var) bool) CompletionItem {
 	label := obj.Name()
 	detail := types.TypeString(obj.Type(), qualifier)
 	var kind CompletionItemKind
+	doc, err := getDocumentation(pkg, obj)
+	if err != nil {
+		fmt.Println("Could not find documentation!")
+	}
 
 	switch o := obj.(type) {
 	case *types.TypeName:
@@ -489,6 +535,7 @@ func formatCompletion(obj types.Object, qualifier types.Qualifier, score float64
 		if sig, ok := o.Type().(*types.Signature); ok {
 			label += formatParams(sig.Params(), sig.Variadic(), qualifier)
 			detail = strings.Trim(types.TypeString(sig.Results(), qualifier), "()")
+			doc = fmt.Sprintf("%s\n%s", sig.String(), doc)
 			kind = FunctionCompletionItem
 			if sig.Recv() != nil {
 				kind = MethodCompletionItem
@@ -511,10 +558,11 @@ func formatCompletion(obj types.Object, qualifier types.Qualifier, score float64
 	detail = strings.TrimPrefix(detail, "untyped ")
 
 	return CompletionItem{
-		Label:  label,
-		Detail: detail,
-		Kind:   kind,
-		Score:  score,
+		Label:         label,
+		Documentation: doc,
+		Detail:        detail,
+		Kind:          kind,
+		Score:         score,
 	}
 }
 

@@ -8,12 +8,13 @@ import (
 	"bytes"
 	"context"
 	"fmt"
-	"github.com/saibing/bingo/langserver/internal/util"
 	"sort"
 	"strings"
 
+	"github.com/saibing/bingo/langserver/internal/util"
+
 	"github.com/saibing/bingo/langserver/internal/source"
-	"github.com/sourcegraph/go-lsp"
+	lsp "github.com/sourcegraph/go-lsp"
 	"github.com/sourcegraph/jsonrpc2"
 )
 
@@ -77,6 +78,7 @@ func toProtocolCompletionItems(candidates []source.CompletionItem, prefix string
 			Label:            candidate.Label,
 			Detail:           candidate.Detail,
 			Kind:             toProtocolCompletionItemKind(candidate.Kind),
+			Documentation:    candidate.Documentation,
 			InsertTextFormat: insertTextFormat,
 			TextEdit: &lsp.TextEdit{
 				NewText: insertText,
@@ -170,9 +172,8 @@ func labelToProtocolSnippets(label string, kind source.CompletionItemKind, inser
 			paramName := strings.Split(strings.Trim(p, " "), " ")[0]
 			fmt.Fprintf(b, "${%v:%v}", i+1, r.Replace(paramName))
 		}
-		fmt.Fprintf(b, ")${0}")
+		fmt.Fprintf(b, ")$0")
 		return b.String(), false
-
 	}
 	return label, false
 }
